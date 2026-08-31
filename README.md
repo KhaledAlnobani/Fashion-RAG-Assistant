@@ -29,22 +29,46 @@ Given a user query, the assistant:
 ## Architecture
 
 ```
-                     ┌─────────────────────┐
-     user query ───▶ │ intent classifier    │
-                     │ (FAQ / Product/Other)│
-                     └─────────┬───────────┘
-                               │
-             ┌─────────────────┼─────────────────┐
-             ▼                 ▼                  ▼
-          FAQ path        Product path         Other path
-     (context dump    (task-nature classify  (chat-history-aware
-      of all FAQs)      → metadata extract     general response)
-                         → schema-constrained
-                           filters → Weaviate
-                           vector search →
-                           progressive filter
-                           relaxation →
-                           grounded answer)
+                                  [ User Query ]
+                                         │
+                                         ▼
+                          ┌─────────────────────────────┐
+                          │      Intent Classifier      │
+                          │   (FAQ / Product / Other)   │
+                          └──────────────┬──────────────┘
+                                         │
+               ┌─────────────────────────┼─────────────────────────┐
+               ▼                         ▼                         ▼
+       [ FAQ Path ]                [ Product Path ]           [ Other Path ]
+             │                           │                           │
+     ┌───────┴───────┐           ┌───────┴───────┐           ┌───────┴───────┐
+     │ Full FAQ      │           │ Task Nature   │           │ Conversational│
+     │ Context Dump  │           │ Classifier    │           │ Memory (Hist) │
+     └───────┬───────┘           └───────┬───────┘           └───────┬───────┘
+             │                           │                           │
+             │                   ┌───────▼───────┐                   │
+             │                   │ JSON Metadata │                   │
+             │                   │ Extraction    │                   │
+             │                   └───────┬───────┘                   │
+             │                           │                           │
+             │                   ┌───────▼───────┐                   │
+             │                   │ Weaviate VDB  │                   │
+             │                   │ Vector Search │                   │
+             │                   └───────┬───────┘                   │
+             │                           │                           │
+             │                   ┌───────▼───────┐                   │
+             │                   │ Progressive   │                   │
+             │                   │ Relaxation    │                   │
+             │                   └───────┬───────┘                   │
+             │                           │                           │
+             └───────────────────────────┼───────────────────────────┘
+                                         ▼
+                          ┌─────────────────────────────┐
+                          │        LLM Generator        │
+                          │  (Grounded Final Answer)    │
+                          └──────────────┬──────────────┘
+                                         ▼
+                                 [ Final Response ]
 ```
 
 ## Tech stack
