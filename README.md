@@ -29,7 +29,7 @@ Given a user query, the assistant:
 ## Architecture
 
 ```
-                                  [ User Query ]
+                                   [ User Query ]
                                          │
                                          ▼
                           ┌─────────────────────────────┐
@@ -42,8 +42,8 @@ Given a user query, the assistant:
        [ FAQ Path ]                [ Product Path ]           [ Other Path ]
              │                           │                           │
      ┌───────┴───────┐           ┌───────┴───────┐           ┌───────┴───────┐
-     │ Full FAQ      │           │ Task Nature   │           │ Conversational│
-     │ Context Dump  │           │ Classifier    │           │ Memory (Hist) │
+     │ Full FAQ      │           │ Task Nature   │           │ Chat Memory   │
+     │ Context Dump  │           │ Classifier    │           │ (History)     │
      └───────┬───────┘           └───────┬───────┘           └───────┬───────┘
              │                           │                           │
              │                   ┌───────▼───────┐                   │
@@ -52,23 +52,23 @@ Given a user query, the assistant:
              │                   └───────┬───────┘                   │
              │                           │                           │
              │                   ┌───────▼───────┐                   │
-             │                   │ Weaviate VDB  │                   │
-             │                   │ Vector Search │                   │
+             │                   │ Weaviate VDB  │◀────────┐         │
+             │                   │ Vector Search │         │         │
+             │                   └───────┬───────┘         │         │
+             │                           │              too few      │
+             │                   ┌───────▼───────┐        results    │
+             │                   │ Progressive   │         │         │
+             │                   │ Relaxation    ├─────────┘         │
              │                   └───────┬───────┘                   │
-             │                           │                           │
-             │                   ┌───────▼───────┐                   │
-             │                   │ Progressive   │                   │
-             │                   │ Relaxation    │                   │
-             │                   └───────┬───────┘                   │
-             │                           │                           │
+             │                           │ enough results            │
              └───────────────────────────┼───────────────────────────┘
                                          ▼
                           ┌─────────────────────────────┐
                           │        LLM Generator        │
-                          │  (Grounded Final Answer)    │
+                          │  (Grounded Final Answer)     │
                           └──────────────┬──────────────┘
                                          ▼
-                                 [ Final Response ]
+                                  [ Final Response ]
 ```
 
 ## Tech stack
