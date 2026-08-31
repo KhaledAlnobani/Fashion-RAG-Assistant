@@ -1,0 +1,5 @@
+ollama
+weaviate-client
+joblib
+python-dotenv
+tqdm
