@@ -5,7 +5,8 @@ from . import config
 from .classification import decide_task_nature
 from .metadata_extraction import generate_metadata_from_query, parse_json_output
 from .retrieval import get_filter_by_metadata, get_relevant_products_from_query
-
+from .tracing import trace_span
+from opentelemetry import trace
 
 def get_params_for_task(task: str) -> dict:
     """Maps a task label to generation parameters. Falls back to 'technical' (safer default)."""
@@ -28,7 +29,7 @@ def generate_items_context(results: list) -> str:
         )
     return "\n".join(lines)
 
-
+@trace_span("query_on_products", {"openinference.span.kind": "CHAIN"})
 def query_on_products(collection, metadata_schema: dict, query: str) -> str:
     """
     Full product-query pipeline: classify task nature -> pick generation params
@@ -47,6 +48,14 @@ def query_on_products(collection, metadata_schema: dict, query: str) -> str:
     relevant_products = get_relevant_products_from_query(collection, query, filters)
     context = generate_items_context(relevant_products)
 
+    current_span = trace.get_current_span()
+    current_span.set_attributes({
+        "input.value": query,
+        "llm.generation_params": str(params),
+        "retrieval.filters_applied": bool(filters),
+        "retrieval.filters_count": len(filters) if filters else 0,
+        "retrieval.retrieved_count": len(relevant_products),
+    })
     system_prompt = (
         "Given the available set of cloth products, answer the question that follows, "
         "providing the item ID in your answers. Other information might be provided but not "
@@ -60,14 +69,23 @@ def query_on_products(collection, metadata_schema: dict, query: str) -> str:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+    with trace_span("ollama_chat_call", {"openinference.span.kind": "LLM", "llm.model_name": config.GENERATION_MODEL}) as span:
+        response = ollama.chat(
+            model=config.GENERATION_MODEL,
+            messages=messages,
+            options={
+                "temperature": params.get("temperature", 0.7),
+                "top_p": params.get("top_p", 0.9),
+                "num_predict": 300,
+            },
+        )
 
-    response = ollama.chat(
-        model=config.GENERATION_MODEL,
-        messages=messages,
-        options={
-            "temperature": params.get("temperature", 0.7),
-            "top_p": params.get("top_p", 0.9),
-            "num_predict": 300,
-        },
-    )
-    return response.message.content.strip()
+        res = response.message.content.strip()
+        span.set_attributes({
+            "input.value": query,
+            "llm.token_count.prompt": response.get("prompt_eval_count", 0),
+            "llm.token_count.completion": response.get("eval_count", 0),
+            "output.value": res,
+            
+        })
+        return res

@@ -11,5 +11,21 @@ services:
       ENABLE_MODULES: 'text2vec-ollama'
       DEFAULT_VECTORIZER_MODULE: 'text2vec-ollama'
       CLUSTER_HOSTNAME: 'node1'
+    volumes:
+      - weaviate_data:/var/lib/weaviate
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+    phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: phoenix-server
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+    volumes:
+      - phoenix_data:/mnt/data
+
+
+volumes:
+  weaviate_data:
+  phoenix_data:

@@ -5,7 +5,8 @@ from weaviate.classes.config import Configure, Property, DataType
 from weaviate.classes.query import Filter
 
 from . import config
-
+from .tracing import trace_span
+from opentelemetry import trace
 
 def get_weaviate_client() -> weaviate.WeaviateClient:
     """
@@ -77,18 +78,35 @@ def get_filter_by_metadata(json_output: dict | None):
 
     return filters
 
-
+@trace_span("get_relevant_products_from_query", {"openinference.span.kind": "retrieval"})
 def get_relevant_products_from_query(collection, query: str, filters: list | None, limit: int = 20):
     """
     Runs near_text search with progressive filter relaxation if too few results.
     `collection` and `filters` are passed in — no globals, no hidden dependency
     on metadata_extraction.py (keeps retrieval.py testable on its own).
     """
+    current_span = trace.get_current_span()
+    filters_count = len(filters) if filters else 0
+    attempts_count = 0
+
     if not filters:
-        return collection.query.near_text(query=query, limit=limit).objects
+        response = collection.query.near_text(query=query, limit=limit).objects
+        current_span.set_attributes({
+            "retrieval.filters_applied": False,
+            "retrieval.filters_count": filters_count,
+            "retrieval.attempts_count": attempts_count,
+            "retrieval.result_count": len(response),
+        })
+        return response
 
     response = collection.query.near_text(query=query, limit=limit, filters=Filter.all_of(filters)).objects
     if len(response) >= 10:
+        current_span.set_attributes({
+            "retrieval.filters_applied": True,
+            "retrieval.filters_count": filters_count,
+            "retrieval.attempts_count": attempts_count,
+            "retrieval.result_count": len(response),
+        })
         return response
 
     importance_order = ["gender", "masterCategory", "articleType", "price", "baseColour", "season", "usage"]
@@ -98,8 +116,22 @@ def get_relevant_products_from_query(collection, query: str, filters: list | Non
         current_filters = [f for f in filters if f.target in keys_to_keep]
         if not current_filters:
             break
+        attempts_count += 1
         response = collection.query.near_text(query=query, limit=limit, filters=Filter.all_of(current_filters)).objects
         if len(response) >= 5:
+            current_span.set_attributes({
+                "retrieval.filters_applied": True,
+                "retrieval.filters_count": filters_count,
+                "retrieval.attempts_count": attempts_count,
+                "retrieval.result_count": len(response),
+            })
             return response
 
-    return collection.query.near_text(query=query, limit=limit).objects
+    response = collection.query.near_text(query=query, limit=limit).objects
+    current_span.set_attributes({
+        "retrieval.filters_applied": False,
+        "retrieval.filters_count": filters_count,
+        "retrieval.attempts_count": attempts_count,
+        "retrieval.result_count": len(response),
+    })
+    return response

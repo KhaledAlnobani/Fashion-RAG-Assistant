@@ -71,12 +71,31 @@ Given a user query, the assistant:
                                   [ Final Response ]
 ```
 
+## Observability
+
+Every request is traced end-to-end with OpenTelemetry, exported to
+[Arize Phoenix](https://arize.com/docs/phoenix). Each query produces a full
+nested trace — intent classification → task-nature classification → metadata
+extraction → retrieval (including filter-relaxation attempts) → final
+generation — with per-span token counts, latency, and cost.
+
+Model costs are priced against
+[together.ai](https://www.together.ai/pricing)'s published rates for the
+equivalent hosted models, used as a production-cost proxy: the models run
+locally via Ollama for free during development, but this lets you see what
+each query would cost if the same pipeline were deployed against a hosted
+inference API instead.
+
+![Phoenix trace view: full pipeline breakdown with per-span cost, latency, and token counts](assets/tracing_dashboard.png)
+
 ## Tech stack
 
 - **Ollama** — local LLM inference (classification, metadata extraction,
   generation) and embeddings (`nomic-embed-text`)
 - **Weaviate** — vector database for the product catalogue, running locally
   via Docker (see `docker-compose.yml`)
+- **Arize Phoenix** — request tracing, cost tracking, and observability,
+  running locally via Docker (see `docker-compose.yml`)
 - **Python** — orchestration, no web framework; runs as a CLI loop
 
 ## Project structure
@@ -89,6 +108,7 @@ Given a user query, the assistant:
 ├── src/
 │   ├── config.py                 # model names, ports, thresholds — all in one place
 │   ├── data_loader.py             # joblib loading, record cleaning, catalogue value extraction
+│   ├── tracing.py                 # OpenTelemetry/Phoenix setup + reusable trace_span decorator
 │   ├── classification.py          # intent + task-nature classification
 │   ├── metadata_extraction.py     # query → structured filters (schema-constrained)
 │   ├── retrieval.py               # Weaviate client/collection setup, filtering, search
@@ -99,7 +119,9 @@ Given a user query, the assistant:
 │   └── ingest_products.py         # one-time script to populate the Weaviate collection
 ├── notebooks/
 │   └── exploration.ipynb          # original prototyping notebook
-├── docker-compose.yml
+├── assets/
+│   └── tracing_dashboard.png      # example Phoenix trace view (see Observability)
+├── docker-compose.yml             # Weaviate + Phoenix
 ├── requirements.txt
 ├── .env.example
 └── main.py                        # CLI entry point
@@ -110,7 +132,7 @@ Given a user query, the assistant:
 ### 1. Prerequisites
 
 - Python 3.10+
-- Docker (for Weaviate)
+- Docker (for Weaviate and Phoenix)
 - [Ollama](https://ollama.com) installed and running locally
 
 ### 2. Clone and install dependencies
@@ -140,17 +162,22 @@ cp .env.example .env
 Adjust values in `.env` if your Weaviate/Ollama setup differs from the
 defaults (see `docker-compose.yml` for the exact ports it exposes).
 
-### 5. Start Weaviate
+### 5. Start Weaviate and Phoenix
 
 ```bash
 docker compose up -d
 ```
 
-Verify it's ready:
+This starts both the Weaviate vector database and the Phoenix tracing
+dashboard. Verify Weaviate is ready:
 
 ```bash
 python -c "from src.retrieval import get_weaviate_client; c = get_weaviate_client(); print(c.is_ready()); c.close()"
 ```
+
+The Phoenix dashboard is available at
+[http://localhost:6006](http://localhost:6006) — traces will start appearing
+here as soon as you run a query in step 7.
 
 ### 6. Ingest the product catalogue
 
@@ -197,7 +224,16 @@ Assistant: Yes, I do have several blue dresses available. Here are the top resul
 - **Progressive filter relaxation.** If a query's extracted filters are too
   specific and return few or no results, filters are dropped one at a time
   (least important first) until enough results are found, falling back to
-  unfiltered semantic search as a last resort.
+  unfiltered semantic search as a last resort. Each attempt is logged as a
+  trace attribute, so the dashboard shows exactly how many relaxation passes
+  a slow query needed.
+- **Tracing as a reusable decorator, not copy-pasted boilerplate.** `trace_span`
+  in `tracing.py` wraps `contextlib.contextmanager`, so it works both as a
+  `with trace_span(...)` block and as a `@trace_span(...)` decorator. Every
+  traced function shares consistent span naming, exception recording
+  (`record_exception` + `set_status`), and cost-relevant attributes
+  (`llm.model_name`, token counts), instead of re-implementing this per call
+  site.
 
 ## Known limitations
 
@@ -207,6 +243,11 @@ Assistant: Yes, I do have several blue dresses available. Here are the top resul
   vector-search pattern as the product path.
 - Chat memory is in-process and single-session; there's no persistence or
   multi-user session handling.
+- Multi-turn follow-ups (e.g. "what about in blue?" or "which one's
+  cheapest?" after a product query) aren't context-aware in the
+  classification/retrieval pipeline — only the general chat fallback path
+  currently uses conversation history, so a follow-up can be misrouted or
+  answered without the prior turn's context.
 - Gender-based filtering (e.g. distinguishing adult vs. kids' clothing) is
   not fully reliable — queries can still surface kidswear alongside adult
   items in some cases.

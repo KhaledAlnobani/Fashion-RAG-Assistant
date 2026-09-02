@@ -3,6 +3,8 @@
 import ollama
 from . import config
 
+from .tracing import trace_span
+from opentelemetry import trace
 
 def generate_faq_layout(faq_data: list[dict]) -> str:
     """
@@ -20,12 +22,10 @@ def generate_faq_layout(faq_data: list[dict]) -> str:
     return "\n".join(lines)
 
 
+@trace_span("query_on_faq", {"openinference.span.kind": "LLM", "llm.model_name": config.GENERATION_MODEL})
 def query_on_faq(query: str, faq_layout: str) -> str:
     """
     Answers a query using the full FAQ context.
-    `faq_layout` is passed in explicitly (built once via generate_faq_layout,
-    e.g. at app startup) rather than referenced as a module-level global —
-    that mismatch was the source of the original TypeError bug.
     """
     system_prompt = (
         "You are a professional FAQ question-answering assistant.\n\n"
@@ -57,4 +57,13 @@ Answer the user's question using only the FAQ context.
             "num_predict": 200,
         },
     )
-    return response.message.content.strip()
+
+    res = response.message.content.strip()
+    current_span = trace.get_current_span()
+    current_span.set_attributes({
+        "input.value": query,
+        "llm.token_count.prompt": response.get("prompt_eval_count", 0),
+        "llm.token_count.completion": response.get("eval_count", 0),
+        "output.value": res,
+    })
+    return res

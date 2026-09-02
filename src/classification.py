@@ -1,12 +1,16 @@
 # src/classification.py
 
 import ollama
+
+from src.tracing import trace_span
 from . import config
+from opentelemetry import trace   
 
 VALID_QUERY_LABELS = ("FAQ", "Product", "OTHER")
 VALID_TASK_LABELS = ("creative", "technical")
 
 
+@trace_span("check_if_faq_or_product", {"openinference.span.kind": "LLM", "llm.model_name": config.INTENT_CLASSIFICATION_MODEL})
 def check_if_faq_or_product(query: str) -> str:
     """
     Classifies a query into FAQ / Product / OTHER.
@@ -40,9 +44,17 @@ def check_if_faq_or_product(query: str) -> str:
     )
 
     label = response.message.content.strip()
+
+    current_span = trace.get_current_span()
+    current_span.set_attributes({
+        "input.value": query,
+        "output.value": label,
+        "llm.token_count.prompt": response.get("prompt_eval_count", 0),
+        "llm.token_count.completion": response.get("eval_count", 0),
+    })
     return label if label in VALID_QUERY_LABELS else "OTHER"
 
-
+@trace_span("decide_task_nature", {"openinference.span.kind": "LLM", "llm.model_name": config.INTENT_CLASSIFICATION_MODEL})
 def decide_task_nature(query: str) -> str:
     """
     Classifies a query as 'creative' or 'technical', to drive generation
@@ -83,4 +95,12 @@ Only output one token: the label."""
     )
 
     label = response.message.content.strip().lower()
+    current_span = trace.get_current_span()
+    current_span.set_attributes({
+        "input.value": query,
+        "output.value": label,
+        "llm.token_count.prompt": response.get("prompt_eval_count", 0),
+        "llm.token_count.completion": response.get("eval_count", 0),
+    })
+
     return label if label in VALID_TASK_LABELS else "technical"

@@ -5,6 +5,9 @@ from . import config
 from .classification import check_if_faq_or_product
 from .faq import query_on_faq
 from .generation import query_on_products
+from .tracing import trace_span
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 
 class FashionAssistant:
@@ -23,6 +26,7 @@ class FashionAssistant:
         self.metadata_schema = metadata_schema
         self.chat_memory: list[dict] = []
 
+    @trace_span("answer_other_query", {"openinference.span.kind": "LLM", "llm.model_name": config.GENERATION_MODEL})
     def _answer_other(self, query: str) -> str:
         system_prompt = (
             "You are a helpful assistant. The user provided a question that does not fit "
@@ -37,8 +41,17 @@ class FashionAssistant:
             messages=messages,
             options={"temperature": 0.7, "num_predict": 300},
         )
-        return response.message.content.strip()
+        res = response.message.content.strip()
+        current_span = trace.get_current_span()
+        current_span.set_attributes({
+            "input.value": query,
+            "llm.token_count.prompt": response.get("prompt_eval_count", 0),
+            "llm.token_count.completion": response.get("eval_count", 0),
+            "output.value": res,
+        })
+        return res
 
+    @trace_span("answer_query", {"openinference.span.kind": "CHAIN"})
     def answer_query(self, query: str) -> str:
         label = check_if_faq_or_product(query)
 
@@ -49,7 +62,10 @@ class FashionAssistant:
             try:
                 final_response = query_on_products(self.products_collection, self.metadata_schema, query)
             except Exception as e:
-                print(f"query_on_products failed: {e}")  
+                current_span = trace.get_current_span()
+                current_span.record_exception(e)
+                current_span.set_status(Status(StatusCode.ERROR, f"query_on_products failed: {str(e)}"))
+
                 system_prompt = (
                     "User provided a question that broke the querying system. Instruct them "
                     "to rephrase it. Answer it based on the context you already have so far."
@@ -64,6 +80,12 @@ class FashionAssistant:
                     options={"temperature": 0.7, "num_predict": 300},
                 )
                 final_response = response.message.content.strip()
+                current_span.set_attributes({
+                    "input.value": query,
+                    "llm.token_count.prompt": response.get("prompt_eval_count", 0),
+                    "llm.token_count.completion": response.get("eval_count", 0),
+                    "output.value": final_response,
+                })
 
         else:
             final_response = self._answer_other(query)

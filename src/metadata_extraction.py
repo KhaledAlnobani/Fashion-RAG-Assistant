@@ -4,6 +4,9 @@ import json
 import ollama
 from . import config
 
+from .tracing import trace_span
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 def build_metadata_schema(allowed_values: dict[str, list[str]]) -> dict:
     """
@@ -40,6 +43,7 @@ def build_metadata_schema(allowed_values: dict[str, list[str]]) -> dict:
     }
 
 
+@trace_span("generate_metadata_from_query", {"openinference.span.kind": "LLM", "llm.model_name": config.METADATA_EXTRACTION_MODEL})
 def generate_metadata_from_query(query: str, metadata_schema: dict) -> str:
     """
     Extracts structured product filters from a free-text query.
@@ -71,14 +75,27 @@ Only include values the query actually implies — don't guess."""
             "num_predict": 300,
         },
     )
-    return response.message.content.strip()
+    res = response.message.content.strip()
+    current_span = trace.get_current_span()
+    current_span.set_attributes({
+        "input.value": query,
+        "llm.token_count.prompt": response.get("prompt_eval_count", 0),
+        "llm.token_count.completion": response.get("eval_count", 0),
+        "output.value": res,
+    })
+    return res
 
-
+@trace_span("parse_json_output", {"openinference.span.kind": "UTILITY"})
 def parse_json_output(llm_output: str) -> dict | None:
     """Parses the LLM's JSON output — no string-replacement hacks needed
     since the schema enforces valid structure and values at the model level."""
+    current_span = trace.get_current_span()
+    current_span.set_attributes({"input.value": llm_output})
     try:
+        current_span.set_attributes({"output.value": llm_output})
         return json.loads(llm_output)
     except json.JSONDecodeError as e:
-        print(f"JSON parsing failed: {e}\nRaw output: {llm_output!r}")
+        current_span.record_exception(e)
+        current_span.set_status(Status(StatusCode.ERROR, str(e)))
+        current_span.set_attributes({"error": str(e)})
         return None
